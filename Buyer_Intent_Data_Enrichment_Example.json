@@ -1,0 +1,753 @@
+{
+  "name": "Buyer Intent Data Enrichment Example",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        800,
+        -360
+      ],
+      "id": "312616d7-660a-4bbb-87dd-d0cbd41a2ff8",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "http://api.scrapingdog.com/linkedinjobs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "68868bcf3c0b180b5b68373d"
+            },
+            {
+              "name": "field",
+              "value": "Business Development Representative"
+            },
+            {
+              "name": "sort_by",
+              "value": "day"
+            },
+            {
+              "name": "location",
+              "value": "United States"
+            },
+            {
+              "name": "job_type",
+              "value": "contract"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        -480
+      ],
+      "id": "f2f3126a-73a5-4911-ac7a-d5046e0094e6",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const raw = item.json.message?.content;\n\n  if (!raw) {\n    throw new Error(\"No message.content found.\");\n  }\n\n  const extract = (label) => {\n    const match = raw.match(new RegExp(`${label}:\\\\s*([^\\n]+)`, \"i\"));\n    return match ? match[1].trim() : \"\";\n  };\n\n  const parsed = {\n    company_name: extract(\"Company Name\"),\n    is_b2b: /Is[_\\s]*B2B:\\s*true/i.test(raw),\n    employee_range: extract(\"Employee Range\"),\n    industry: extract(\"Industry\"),\n    is_tech: /Is[_\\s]*Tech:\\s*true/i.test(raw),\n    funding_stage: extract(\"Funding Stage\"),\n    estimated_valuation: extract(\"Estimated Valuation\"),\n  };\n\n  const funding = parsed.funding_stage.toLowerCase();\n  const industry = parsed.industry.toLowerCase();\n  const isB2B = parsed.is_b2b === true;\n  const employeeRange = parsed.employee_range.replace(/[^\\d\\-]/g, \"\");\n\n  // Auto-zero if recruiting/staffing industry\n  const industryIsExcluded = industry.includes(\"recruiting\") || industry.includes(\"staffing\");\n\n  const score = {\n    funding_stage: 0,\n    industry: 0,\n    is_tech: 0,\n    is_b2b: 0,\n    employee_range: 0,\n  };\n\n  if (!industryIsExcluded) {\n    // Funding logic\n    if (funding.includes(\"public\") || funding.includes(\"enterprise\") || funding.includes(\"ipo\")) {\n      score.funding_stage = 0;\n    } else if (funding.includes(\"seed\") || funding.includes(\"series a\") || funding.includes(\"early stage\")) {\n      score.funding_stage = 1;\n    } else if (funding.includes(\"series b\")) {\n      score.funding_stage = 0.75;\n    } else if (funding.includes(\"series c\") || funding.includes(\"growth\")) {\n      score.funding_stage = 0.5;\n    } else {\n      score.funding_stage = 0.25;\n    }\n\n    // Industry scoring\n    if (industry.includes(\"saas\") || industry.includes(\"software\") || industry.includes(\"ai\") || industry.includes(\"platform\")) {\n      score.industry = 1;\n    } else if (industry.includes(\"tech\") || industry.includes(\"data\") || industry.includes(\"analytics\")) {\n      score.industry = 0.75;\n    } else if (industry.includes(\"services\") || industry.includes(\"reporting\")) {\n      score.industry = 0.5;\n    }\n\n    // Tech inference\n    score.is_tech = parsed.is_tech ? 0.75 : 0.25;\n\n    // B2B flag\n    score.is_b2b = isB2B ? 0.5 : 0.1;\n\n    // Employee range\n    const matchRange = employeeRange.match(/(\\d+)/g);\n    if (matchRange && matchRange.length >= 1) {\n      const min = parseInt(matchRange[0]);\n      if (min >= 11 && min <= 50) score.employee_range = 0.5;\n      else if (min <= 100) score.employee_range = 0.25;\n    }\n  }\n\n  const totalScore = industryIsExcluded\n    ? 0\n    : score.funding_stage * 0.4 +\n      score.industry * 0.3 +\n      score.is_tech * 0.15 +\n      score.is_b2b * 0.1 +\n      score.employee_range * 0.05;\n\n  return {\n    json: {\n      ...item.json,\n      parsed_company: parsed,\n      icp_score: parseFloat(totalScore.toFixed(2)),\n      icp_breakdown: score\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2580,
+        -480
+      ],
+      "id": "cfe19499-4068-4b7a-bf4b-d742ee6382dc",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cf163e0a-5618-47fd-916a-dfb275d99f36",
+              "leftValue": "={{ $json.icp_score }}",
+              "rightValue": 0.6,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2780,
+        -480
+      ],
+      "id": "eafd9921-942e-49bc-84df-5907c845db49",
+      "name": "If"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3400,
+        -480
+      ],
+      "id": "acb00c45-815d-4dd9-8a91-8434a622f3c0",
+      "name": "No Operation, do nothing1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1bf819d5-a336-4294-bc73-ab810f3bf29c",
+              "name": "message.content",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2160,
+        -480
+      ],
+      "id": "3e665938-e36f-436f-b940-576a30edc890",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const signals = item.json.parsed_signals || {};\n\n  // Apply weights to each signal\n  const score =\n    (signals.hiring ? 1 : 0) * 0.3 +\n    (signals.fundraising ? 1 : 0) * 0.25 +\n    (signals.strategic ? 1 : 0) * 0.2 +\n    (signals.content ? 1 : 0) * 0.1 +\n    (signals.leadership ? 1 : 0) * 0.1 +\n    (signals.sales_tools ? 1 : 0) * 0.05;\n\n  return {\n    json: {\n      ...item.json,\n      buyer_intent_score: parseFloat(score.toFixed(2)),\n      signal_breakdown: signals\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4500,
+        -720
+      ],
+      "id": "1ddfaac9-9430-4923-91b3-65fad08a9846",
+      "name": "Code4"
+    },
+    {
+      "parameters": {
+        "model": "sonar",
+        "messages": {
+          "message": [
+            {
+              "content": "You are a meticulous business research assistant tasked with evaluating companies for B2B prospecting. You must extract factual information about companies from trustworthy sources such as LinkedIn, Crunchbase, company websites, and news articles. Your job is to determine whether a company matches the following criteria:\\n\\n1. B2B company\\n2. Tech-enabled (e.g. SaaS, platform, AI, data, etc.)\\n3. 11–50 employees\\n4. Seed-stage or has raised at least $10M in total funding\\n\\nUse recent and credible sources. Return answers in plain text format only — do not include any commentary, markdown, or code formatting.",
+              "role": "system"
+            },
+            {
+              "content": "=Evaluate the company \\\"{{ $json.company_name }}\\\" using sources such as LinkedIn and Crunchbase, and return only the following in plain text format:\n\nCompany Name:\nIs_B2B: [True/False]\nEmployee Range:\nIndustry:\nIs_Tech: [True/False]\nFunding Stage:\nEstimated Valuation:"
+            }
+          ]
+        },
+        "options": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-base.perplexity",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        -260
+      ],
+      "id": "76ae7667-cba6-438c-a184-e859e18d75c9",
+      "name": "Perplexity2",
+      "credentials": {
+        "perplexityApi": {
+          "id": "dejH4yTQc25g2aGs",
+          "name": "Perplexity account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "sonar",
+        "messages": {
+          "message": [
+            {
+              "content": "You are a strategic sales research assistant helping identify recent buyer intent signals from companies that match our ICP. You must pull publicly available signals from trusted sources like LinkedIn, Crunchbase, company blogs, PR sites, news articles, and thought leadership content. You must only include information published or verifiably occurred within the last 3 months. Disregard any signals older than that.",
+              "role": "system"
+            },
+            {
+              "content": "=Research the company {{ $json.parsed_company.company_name }} and return any of the following buyer intent signals found within the past 3 months:\n\nRecent job postings for BDRs, AEs, SDRs, or GTM roles. \nContent engagement or thought leadership posted by execs (especially on LinkedIn). \nFundraising activity — Seed or Series A especially. \nRapid GTM hiring or sales team growth. \nCrunchbase or PR insights indicating growth or strategy shift. \nVP/CRO/CMO hires in the past year (highlight only if it occurred in the last 3 months). \nEvidence they’re using typical sales tools (Salesforce, Outreach, Apollo, HubSpot, etc.). \nBlog or leadership content indicating their focus or future direction. \nConference attendance or talks given by execs. \nRecent M&A activity (acquisitions or being acquired)\n\nReturn a concise bullet-point summary of what you found, and include links or sources wherever possible. Only return signals dated within the last 3 months."
+            }
+          ]
+        },
+        "options": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-base.perplexity",
+      "typeVersion": 1,
+      "position": [
+        3380,
+        -720
+      ],
+      "id": "60fdc5ba-9d7d-412a-a6c6-576e8ff3834e",
+      "name": "Perplexity3",
+      "credentials": {
+        "perplexityApi": {
+          "id": "dejH4yTQc25g2aGs",
+          "name": "Perplexity account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8c6bb01a-e4dd-4693-9335-a2af8b58f9c2",
+              "name": "analysis_content",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3600,
+        -720
+      ],
+      "id": "f8850899-2d72-41c8-afa6-c3fde0f67248",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a precise signal extractor for GTM buyer intent analysis. Based on the summary provided, return a JSON object with six binary values (true/false) indicating whether the following signals were clearly present in the summary — and not just mentioned hypothetically or in a negated context.\n\nSignals:\n- hiring\n- fundraising\n- content\n- leadership\n- strategic\n- sales_tools\n\nA signal is TRUE only if there is explicit evidence or recent action within the past 3 months (e.g., “Rain posted GTM jobs in July 2025” counts as hiring = true; “No recent fundraising observed” = fundraising = false).\n\nOutput formatting follow the example below:\n\nHiring: true,\nFundraising: false,\nContent: false,\nLeadership: true,\nStrategic: true,\nSales Tools: false\n\nSummary:\n{{ $json.analysis_content }}\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        3820,
+        -720
+      ],
+      "id": "80a5df8e-b94f-4d76-8492-f6fa9b076327",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3820,
+        -580
+      ],
+      "id": "7ec95697-960e-46ff-9f0d-79fe533b702e",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "urFzJOukgngMNRHj",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizeKey(key) {\n  return key\n    .toLowerCase()\n    .replace(/\\s+/g, \"_\")        // Replace spaces with underscores\n    .replace(/[^\\w_]/g, \"\");     // Remove punctuation\n}\n\nreturn items.map(item => {\n  let raw = item.json.output || \"\";\n\n  // Step 1: Remove backticks and ```json ... ``` wrappers\n  raw = raw.replace(/^```json\\s*/i, \"\").replace(/```$/, \"\").trim();\n\n  // Step 2: Attempt to parse JSON\n  let parsed = {};\n  try {\n    const obj = JSON.parse(raw);\n    for (const key in obj) {\n      const normalizedKey = normalizeKey(key);\n      parsed[normalizedKey] = obj[key];\n    }\n  } catch (err) {\n    parsed = {\n      hiring: false,\n      fundraising: false,\n      content: false,\n      leadership: false,\n      strategic: false,\n      sales_tools: false,\n      error: \"Invalid JSON\"\n    };\n  }\n\n  return {\n    json: {\n      ...item.json,\n      parsed_signals: parsed\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4260,
+        -720
+      ],
+      "id": "e94539de-f3ad-43e6-89d5-d5363e5a6533",
+      "name": "Code6"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C098P0VQ49Y",
+          "mode": "list",
+          "cachedResultName": "buyer-intent-leads"
+        },
+        "messageType": "block",
+        "blocksUi": "={\n\t\"blocks\": [\n\t\t{\n\t\t\t\"type\": \"header\",\n\t\t\t\"text\": {\n\t\t\t\t\"type\": \"plain_text\",\n\t\t\t\t\"text\": \"{{ $('If').item.json.parsed_company.company_name }}\",\n\t\t\t\t\"emoji\": true\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"type\": \"section\",\n\t\t\t\"text\": {\n\t\t\t\t\"type\": \"mrkdwn\",\n\t\t\t\t\"text\": \"New ICP company fit! :chart_with_upwards_trend: Here are your signals:\"\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"type\": \"rich_text\",\n\t\t\t\"elements\": [\n\t\t\t\t{\n\t\t\t\t\t\"type\": \"rich_text_list\",\n\t\t\t\t\t\"style\": \"bullet\",\n\t\t\t\t\t\"indent\": 0,\n\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"ICP Score: {{ $('If').item.json.icp_score }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Buyer Intent Score: {{ $json.buyer_intent_score }} \"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Hiring Indicator: {{ $json.parsed_signals.hiring }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Funding Indicator: {{ $json.parsed_signals.fundraising }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Content Indicator: {{ $json.parsed_signals.content }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Leadership Indicator: {{ $json.parsed_signals.leadership }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Strategic Direction Indicator: {{ $json.parsed_signals.strategic }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"type\": \"rich_text_section\",\n\t\t\t\t\t\t\t\"elements\": [\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\t\"type\": \"text\",\n\t\t\t\t\t\t\t\t\t\"text\": \"Sales Tools Indicator: {{ $json.parsed_signals.sales_tools }}\"\n\t\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t}\n\t\t\t\t\t]\n\t\t\t\t}\n\t\t\t]\n\t\t}\n\t]\n}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        4960,
+        -860
+      ],
+      "id": "3301e088-9a48-4de1-8c09-b15d0bdba71b",
+      "name": "Slack",
+      "webhookId": "2b5b7f3d-0e24-4ae7-8208-0bd93e6df709",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "yS7DBFSmCC6O6Yjv",
+          "name": "Slack account 3 (GS)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bc376288-eef2-4f5b-8c99-42b598c20cc7",
+              "leftValue": "={{ $json.buyer_intent_score }}",
+              "rightValue": 0.4,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4720,
+        -720
+      ],
+      "id": "42a53a04-2f74-45ba-ae94-44cbcd9f94d1",
+      "name": "If1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        4960,
+        -620
+      ],
+      "id": "0dca2ad5-02fc-421a-a9e9-96d69d80ace1",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {
+        "url": "http://api.scrapingdog.com/linkedinjobs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "68868bcf3c0b180b5b68373d"
+            },
+            {
+              "name": "field",
+              "value": "Business Development Representative"
+            },
+            {
+              "name": "sort_by",
+              "value": "day"
+            },
+            {
+              "name": "location",
+              "value": "United States"
+            },
+            {
+              "name": "job_type",
+              "value": "contract"
+            },
+            {
+              "name": "page",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        -300
+      ],
+      "id": "9edc743c-ca49-47e6-bb70-55d2d1160b42",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "url": "http://api.scrapingdog.com/linkedinjobs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "68868bcf3c0b180b5b68373d"
+            },
+            {
+              "name": "field",
+              "value": "Business Development Representative"
+            },
+            {
+              "name": "sort_by",
+              "value": "day"
+            },
+            {
+              "name": "location",
+              "value": "United States"
+            },
+            {
+              "name": "job_type",
+              "value": "contract"
+            },
+            {
+              "name": "page",
+              "value": "3"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        -100
+      ],
+      "id": "65c3ef30-b333-4914-b90b-6c2e250fe851",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1480,
+        -480
+      ],
+      "id": "510e63d8-7bc0-450a-8c0b-145644478f75",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1700,
+        -480
+      ],
+      "id": "090dd945-642c-4048-ac4a-4dbd4d413dbd",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        -260
+      ],
+      "id": "6aeb4c30-f299-49f5-88f2-40d177bae406",
+      "name": "Wait",
+      "webhookId": "3cf5356c-0919-44a2-a55c-bbf4492d3d39"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Perplexity3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Operation, do nothing1": {
+      "main": [
+        []
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code4": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perplexity2": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perplexity3": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code6": {
+      "main": [
+        [
+          {
+            "node": "Code4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack": {
+      "main": [
+        []
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Perplexity2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1a03486f-1bb4-492d-a218-1132b8f80697",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "3287dd10ae5dfb6312cecd6adf7770eca98cfa8c9d670e5b5b17caae67f94d86"
+  },
+  "id": "BEXQDw0obI6evPib",
+  "tags": [
+    {
+      "createdAt": "2025-08-11T11:20:55.015Z",
+      "updatedAt": "2025-08-11T11:20:55.015Z",
+      "id": "PzxY7BT6C87s5QuP",
+      "name": "github samples"
+    }
+  ]
+}
